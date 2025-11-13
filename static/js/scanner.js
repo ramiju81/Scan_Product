@@ -1,5 +1,5 @@
 // static/js/scanner.js
-// Scanner + cámara + notificaciones + popup de producto
+// Scanner + cámara + notificaciones + popup de producto + VOZ
 // Usando Supabase como BD compartida.
 
 let codeReader = null;
@@ -36,6 +36,53 @@ function alertLevel(daysLeft) {
   if (daysLeft === 2) return "2-dias";
   if (daysLeft === 3) return "3-dias";
   return "ok";
+}
+
+// =====================
+// Voz (Web Speech API)
+// =====================
+
+let selectedVoice = null;
+
+function initVoice() {
+  if (!("speechSynthesis" in window)) return;
+
+  const populate = () => {
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || !voices.length) return;
+
+    // Buscamos voz femenina en español si existe
+    const prefer = voices.filter(v =>
+      /es-|es_/.test(v.lang.toLowerCase()) &&
+      /female|mujer|woman/i.test(v.name)
+    );
+
+    if (prefer.length) {
+      selectedVoice = prefer[0];
+    } else {
+      const esVoices = voices.filter(v => /es-|es_/.test(v.lang.toLowerCase()));
+      if (esVoices.length) {
+        selectedVoice = esVoices[0];
+      } else {
+        selectedVoice = voices[0];
+      }
+    }
+  };
+
+  populate();
+  window.speechSynthesis.onvoiceschanged = populate;
+}
+
+function speak(text) {
+  if (!("speechSynthesis" in window) || !text) return;
+
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  if (selectedVoice) utter.voice = selectedVoice;
+  utter.lang = (selectedVoice && selectedVoice.lang) || "es-ES";
+  utter.rate = 1;
+  utter.pitch = 1.0;
+  window.speechSynthesis.speak(utter);
 }
 
 // =====================
@@ -127,7 +174,8 @@ async function buscarProductoPorCodigo(code) {
     alert_level: lvl,
   };
 
-  mostrarNotificacionProducto(producto);
+  // Notificación “normal” (consulta puntual)
+  mostrarNotificacionProducto(producto, false);
   mostrarModalProducto(producto);
 }
 
@@ -183,6 +231,10 @@ function mostrarPopupProductoNoEncontrado(code) {
   });
 
   overlay.classList.add("show");
+
+  // Voz para producto no encontrado
+  speak(`El código ${code} no está creado en la base de datos. 
+Si quieres, puedes crear el producto ahora.`);
 }
 
 // =====================
@@ -317,6 +369,27 @@ function mostrarModalProducto(data) {
   statusEl.textContent = textoStatus;
 
   overlay.classList.add("show");
+
+  // 🔊 Voz: presentación del producto
+  const diasTexto = Number.isNaN(data.days_to_expiry)
+    ? ""
+    : data.days_to_expiry > 0
+      ? `Quedan ${data.days_to_expiry} días para el vencimiento.`
+      : data.days_to_expiry === 0
+      ? "El producto se vence hoy."
+      : "El producto ya está vencido.";
+
+  const speechText =
+    `Producto: ${data.name || "sin nombre"}. ` +
+    `Código ${data.code || ""}. ` +
+    (data.company ? `Pertenece a ${data.company}. ` : "") +
+    (data.location ? `Ubicación: ${data.location}. ` : "") +
+    (data.area ? `Área: ${data.area}. ` : "") +
+    (data.lot ? `Lote ${data.lot}. ` : "") +
+    (data.expiry_date ? `Fecha de vencimiento: ${data.expiry_date}. ` : "") +
+    diasTexto;
+
+  speak(speechText);
 }
 
 // =====================
@@ -414,6 +487,7 @@ function crearModalCrearProductoSiNoExiste() {
 
     if (!code || !name) {
       showToast("Código y nombre son obligatorios.");
+      speak("Para guardar el producto, necesito al menos el código y el nombre.");
       return;
     }
 
@@ -436,6 +510,7 @@ function crearModalCrearProductoSiNoExiste() {
     } catch (err) {
       console.error("Error de red guardando producto:", err);
       showToast("No se pudo guardar el producto (error de red).");
+      speak("No he podido guardar el producto por un error de conexión.");
       return;
     }
 
@@ -443,16 +518,17 @@ function crearModalCrearProductoSiNoExiste() {
     if (error) {
       console.error("Error Supabase al guardar producto:", error);
       showToast("No se pudo guardar el producto en la base de datos.");
+      speak("Ocurrió un error al guardar el producto en la base de datos.");
       return;
     }
 
-    // Limpia el formulario
     overlay.querySelector("#create-product-form").reset();
     overlay.classList.remove("show");
 
+    // Mensaje visual + voz de confirmación
     showToast("Producto guardado en la base de datos.");
+    speak(`El producto ${name} se creó correctamente en la base de datos.`);
 
-    // Si tiene fechas, calculamos días y mostramos ficha de una vez
     const dte = daysToExpiry(nuevoProducto.expiry_date);
     const lvl = alertLevel(dte);
     const prodConEstado = {
@@ -470,6 +546,9 @@ function mostrarModalCrearProducto(code) {
   const overlay = crearModalCrearProductoSiNoExiste();
   overlay.querySelector("#cp-code").value = code || "";
   overlay.classList.add("show");
+
+  speak(`Vas a crear un nuevo producto para el código ${code}. 
+Diligencia el nombre del producto y los datos que tengas disponibles.`);
 }
 
 // =====================
@@ -494,7 +573,8 @@ function construirTextoEstado(lvl) {
   return "En buen estado";
 }
 
-function mostrarNotificacionProducto(data) {
+// fromAlert = true cuando viene del proceso automático cada 10 min
+function mostrarNotificacionProducto(data, fromAlert) {
   const lvl = data.alert_level;
   const estado = construirTextoEstado(lvl);
 
@@ -509,25 +589,37 @@ function mostrarNotificacionProducto(data) {
   if (!("Notification" in window) || Notification.permission !== "granted") {
     console.log("[Alerta producto]", body);
     showToast(`${data.name}: ${estado}`);
-    return;
+  } else {
+    let titulo =
+      lvl === "vencido"
+        ? "Producto vencido"
+        : lvl === "ok"
+        ? "Producto consultado"
+        : "Producto próximo a vencer";
+
+    const notif = new Notification(titulo, {
+      body,
+      icon: "https://cdn-icons-png.flaticon.com/512/463/463612.png",
+    });
+
+    notif.onclick = () => {
+      window.focus();
+      mostrarModalProducto(data);
+    };
   }
 
-  let titulo =
-    lvl === "vencido"
-      ? "Producto vencido"
-      : lvl === "ok"
-      ? "Producto consultado"
-      : "Producto próximo a vencer";
-
-  const notif = new Notification(titulo, {
-    body,
-    icon: "https://cdn-icons-png.flaticon.com/512/463/463612.png",
-  });
-
-  notif.onclick = () => {
-    window.focus();
-    mostrarModalProducto(data);
-  };
+  // 🔊 Voz específica cuando viene del proceso de alertas periódicas
+  if (fromAlert) {
+    let frase = "";
+    if (lvl === "vencido") {
+      frase = `Alerta. El producto ${data.name} está vencido.`;
+    } else if (data.days_to_expiry === 0) {
+      frase = `Alerta. El producto ${data.name} se vence hoy.`;
+    } else if (!Number.isNaN(data.days_to_expiry) && data.days_to_expiry > 0) {
+      frase = `Alerta. El producto ${data.name} se vence en ${data.days_to_expiry} días.`;
+    }
+    if (frase) speak(frase);
+  }
 }
 
 // =====================
@@ -559,7 +651,7 @@ async function iniciarCamara() {
 
   try {
     await codeReader.decodeFromVideoDevice(
-      undefined, // cámara por defecto
+      undefined,
       videoElem,
       (result, err) => {
         if (result) {
@@ -567,10 +659,11 @@ async function iniciarCamara() {
           console.log("Código leído por cámara:", text);
           codeInput.value = text;
 
-          // 🔹 Cierra la cámara al leer el código
-          detenerCamara();
+          // Voz al escanear
+          speak("Producto escaneado. A continuación te diré qué producto es.");
 
-          // 🔹 Busca el producto automáticamente
+          // Cierra la cámara y busca automático
+          detenerCamara();
           buscarProductoPorCodigo(text);
         }
       }
@@ -639,12 +732,14 @@ async function mostrarAlertasPeriodicas() {
     const last = lastNotified.get(p.code) || 0;
     if (ahora - last < NOTIFY_INTERVAL_MS) return;
     lastNotified.set(p.code, ahora);
-    mostrarNotificacionProducto(p);
+    // fromAlert = true → dispara la frase de voz de alerta
+    mostrarNotificacionProducto(p, true);
   });
 }
 
 // =====================
 // Inicialización
 // =====================
+initVoice();
 solicitarPermisoNotificaciones();
 setInterval(mostrarAlertasPeriodicas, NOTIFY_INTERVAL_MS);
