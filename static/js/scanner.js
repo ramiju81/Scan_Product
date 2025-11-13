@@ -6,6 +6,13 @@ let codeReader = null;
 let cameraOn   = false;
 
 // =====================
+// Constantes alertas
+// =====================
+const NOTIFY_INTERVAL_MINUTES = 10;
+const NOTIFY_INTERVAL_MS = NOTIFY_INTERVAL_MINUTES * 60 * 1000;
+const lastNotified = new Map();
+
+// =====================
 // Utilidades fecha
 // =====================
 function parseDateISO(d) {
@@ -66,25 +73,48 @@ const videoWrapper = document.getElementById("video-wrapper");
 const videoElem    = document.getElementById("preview");
 
 // =====================
+// Supabase helper
+// =====================
+function getSupabase() {
+  const client = window.supabaseClient;
+  if (!client) {
+    console.error("SupabaseClient no está inicializado.");
+    showToast("Error de configuración con Supabase.");
+  }
+  return client;
+}
+
+// =====================
 // Buscar producto en Supabase
 // =====================
 async function buscarProductoPorCodigo(code) {
   if (!code) return;
+  const supabase = getSupabase();
+  if (!supabase) return;
 
-  const { data, error } = await window.supabaseClient
-    .from("productos")
-    .select("*")
-    .eq("code", code)
-    .maybeSingle();
+  let resp;
+  try {
+    resp = await supabase
+      .from("productos")
+      .select("*")
+      .eq("code", code)
+      .maybeSingle();
+  } catch (err) {
+    console.error("Error de red al llamar a Supabase:", err);
+    showToast("Error al conectarse con la base de datos.");
+    return;
+  }
+
+  const { data, error } = resp;
 
   if (error) {
-    console.error(error);
-    showToast("Error consultando la BD en la nube.");
+    console.error("Error Supabase:", error);
+    showToast("Error consultando la base de datos.");
     return;
   }
 
   if (!data) {
-    showToast(`Producto con código ${code} no encontrado.`);
+    mostrarPopupProductoNoEncontrado(code);
     return;
   }
 
@@ -102,7 +132,61 @@ async function buscarProductoPorCodigo(code) {
 }
 
 // =====================
-// Modal de producto
+// Popup: producto NO encontrado
+// =====================
+function mostrarPopupProductoNoEncontrado(code) {
+  let overlay = document.getElementById("product-not-found-overlay");
+  if (overlay) overlay.remove();
+
+  overlay = document.createElement("div");
+  overlay.id = "product-not-found-overlay";
+  overlay.className = "modal-overlay";
+
+  overlay.innerHTML = `
+    <div class="modal" style="max-width: 420px;">
+      <div class="modal-header">
+        <div class="modal-icon">⚠️</div>
+        <div class="modal-title-wrap">
+          <h3>Producto no encontrado</h3>
+          <p>Código: ${code}</p>
+        </div>
+        <button class="modal-close" id="nf-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="status-text">
+          Este código aún no está creado en la base de datos.
+        </p>
+        <p class="hint-text">
+          ¿Deseas crear el producto ahora?
+        </p>
+        <div class="modal-actions" style="margin-top: 12px; display:flex; gap:8px; justify-content:flex-end;">
+          <button class="btn-secondary" id="nf-cancel-btn">Cancelar</button>
+          <button class="btn-primary" id="nf-create-btn">Crear producto</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.classList.remove("show");
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("#nf-close-btn").addEventListener("click", close);
+  overlay.querySelector("#nf-cancel-btn").addEventListener("click", close);
+  overlay.querySelector("#nf-create-btn").addEventListener("click", () => {
+    close();
+    overlay.remove();
+    mostrarModalCrearProducto(code);
+  });
+
+  overlay.classList.add("show");
+}
+
+// =====================
+// Modal: ficha de producto
 // =====================
 function crearModalProductoSiNoExiste() {
   let overlay = document.getElementById("product-modal-overlay");
@@ -236,6 +320,159 @@ function mostrarModalProducto(data) {
 }
 
 // =====================
+// Modal: crear producto
+// =====================
+function crearModalCrearProductoSiNoExiste() {
+  let overlay = document.getElementById("create-product-modal-overlay");
+  if (overlay) return overlay;
+
+  overlay = document.createElement("div");
+  overlay.id = "create-product-modal-overlay";
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-icon">✨</div>
+        <div class="modal-title-wrap">
+          <h3>Crear producto</h3>
+          <p>Completa la información y se guardará en la base de datos.</p>
+        </div>
+        <button class="modal-close" id="cp-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="create-product-form" class="modal-grid">
+          <div>
+            <span class="label">Código (escaneado)</span>
+            <input id="cp-code" class="scan-input" type="text" readonly />
+          </div>
+          <div>
+            <span class="label">Nombre del producto</span>
+            <input id="cp-name" class="scan-input" type="text" required />
+          </div>
+          <div>
+            <span class="label">Empresa / Entidad</span>
+            <input id="cp-company" class="scan-input" type="text" />
+          </div>
+          <div>
+            <span class="label">Ubicación</span>
+            <input id="cp-location" class="scan-input" type="text" />
+          </div>
+          <div>
+            <span class="label">Área</span>
+            <input id="cp-area" class="scan-input" type="text" />
+          </div>
+          <div>
+            <span class="label">Lote</span>
+            <input id="cp-lot" class="scan-input" type="text" />
+          </div>
+          <div>
+            <span class="label">Fecha elaboración</span>
+            <input id="cp-made" class="scan-input" type="date" />
+          </div>
+          <div>
+            <span class="label">Fecha vencimiento</span>
+            <input id="cp-expiry" class="scan-input" type="date" />
+          </div>
+        </form>
+
+        <div class="modal-extra" style="margin-top:10px;">
+          <p class="hint-text">
+            Al guardar, el producto quedará disponible para futuros escaneos
+            y se incluirá en las alertas automáticas.
+          </p>
+          <div class="modal-actions" style="margin-top: 10px; display:flex; gap:8px; justify-content:flex-end;">
+            <button class="btn-secondary" id="cp-cancel-btn" type="button">Cancelar</button>
+            <button class="btn-primary" id="cp-save-btn" type="button">Guardar producto</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.classList.remove("show");
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("#cp-close-btn").addEventListener("click", close);
+  overlay.querySelector("#cp-cancel-btn").addEventListener("click", close);
+
+  // Guardar
+  overlay.querySelector("#cp-save-btn").addEventListener("click", async () => {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    const code    = overlay.querySelector("#cp-code").value.trim();
+    const name    = overlay.querySelector("#cp-name").value.trim();
+    const company = overlay.querySelector("#cp-company").value.trim();
+    const loc     = overlay.querySelector("#cp-location").value.trim();
+    const area    = overlay.querySelector("#cp-area").value.trim();
+    const lot     = overlay.querySelector("#cp-lot").value.trim();
+    const made    = overlay.querySelector("#cp-made").value;
+    const expiry  = overlay.querySelector("#cp-expiry").value;
+
+    if (!code || !name) {
+      showToast("Código y nombre son obligatorios.");
+      return;
+    }
+
+    const nuevoProducto = {
+      code,
+      name,
+      company,
+      location: loc,
+      area,
+      lot,
+      made_date: made || null,
+      expiry_date: expiry || null,
+    };
+
+    let resp;
+    try {
+      resp = await supabase
+        .from("productos")
+        .upsert(nuevoProducto, { onConflict: "code" });
+    } catch (err) {
+      console.error("Error de red guardando producto:", err);
+      showToast("No se pudo guardar el producto (error de red).");
+      return;
+    }
+
+    const { error } = resp;
+    if (error) {
+      console.error("Error Supabase al guardar producto:", error);
+      showToast("No se pudo guardar el producto en la base de datos.");
+      return;
+    }
+
+    // Limpia el formulario
+    overlay.querySelector("#create-product-form").reset();
+    overlay.classList.remove("show");
+
+    showToast("Producto guardado en la base de datos.");
+
+    // Si tiene fechas, calculamos días y mostramos ficha de una vez
+    const dte = daysToExpiry(nuevoProducto.expiry_date);
+    const lvl = alertLevel(dte);
+    const prodConEstado = {
+      ...nuevoProducto,
+      days_to_expiry: dte,
+      alert_level: lvl,
+    };
+    mostrarModalProducto(prodConEstado);
+  });
+
+  return overlay;
+}
+
+function mostrarModalCrearProducto(code) {
+  const overlay = crearModalCrearProductoSiNoExiste();
+  overlay.querySelector("#cp-code").value = code || "";
+  overlay.classList.add("show");
+}
+
+// =====================
 // Notificaciones del sistema
 // =====================
 async function solicitarPermisoNotificaciones() {
@@ -294,7 +531,7 @@ function mostrarNotificacionProducto(data) {
 }
 
 // =====================
-// Eventos input / cámara
+// Eventos input / búsqueda manual
 // =====================
 btnSearch.addEventListener("click", () => {
   const code = codeInput.value.trim();
@@ -308,7 +545,9 @@ codeInput.addEventListener("keydown", (e) => {
   }
 });
 
-// Cámara usando dispositivo por defecto
+// =====================
+// Cámara: escaneo automático
+// =====================
 async function iniciarCamara() {
   if (!codeReader) {
     codeReader = new ZXingBrowser.BrowserMultiFormatReader();
@@ -327,7 +566,11 @@ async function iniciarCamara() {
           const text = result.getText();
           console.log("Código leído por cámara:", text);
           codeInput.value = text;
-          codeInput.focus();
+
+          // 🔹 Cierra la cámara al leer el código
+          detenerCamara();
+
+          // 🔹 Busca el producto automáticamente
           buscarProductoPorCodigo(text);
         }
       }
@@ -359,17 +602,21 @@ btnToggleCam.addEventListener("click", () => {
 // =====================
 // Alertas automáticas cada 10 minutos
 // =====================
-const lastNotified = new Map();
-const NOTIFY_INTERVAL_MINUTES = 10;
-const NOTIFY_INTERVAL_MS = NOTIFY_INTERVAL_MINUTES * 60 * 1000;
-
 async function obtenerProductosEnAlerta() {
-  const { data, error } = await window.supabaseClient
-    .from("productos")
-    .select("*");
+  const supabase = getSupabase();
+  if (!supabase) return [];
 
+  let resp;
+  try {
+    resp = await supabase.from("productos").select("*");
+  } catch (err) {
+    console.error("Error de red obteniendo productos:", err);
+    return [];
+  }
+
+  const { data, error } = resp;
   if (error) {
-    console.error(error);
+    console.error("Error Supabase al obtener productos:", error);
     return [];
   }
 
