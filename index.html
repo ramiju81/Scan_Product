@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Control de Vencimientos – Scanner</title>
+  <link rel="stylesheet" href="static/css/styles.css" />
+  <!-- ZXing para leer códigos de barras y QR -->
+  <script src="https://unpkg.com/@zxing/browser@latest"></script>
+</head>
+<body class="body-bg">
+  <div class="page-shell">
+    <header class="top-bar">
+      <div class="brand-block">
+        <div class="brand-mark">CV</div>
+        <div class="brand-text">
+          <h1>Control de Vencimientos</h1>
+          <p>Lectura por código de barras y QR.</p>
+        </div>
+      </div>
+      <nav class="top-actions">
+        <a href="carga.html" class="pill-link">Cargar CSV</a>
+      </nav>
+    </header>
+
+    <main class="main-layout" style="grid-template-columns: minmax(0,1fr);">
+      <section class="scanner-panel">
+        <h2 class="section-title">
+          <span class="step">1</span> Escanear / ingresar código
+        </h2>
+
+        <div class="scan-card">
+          <div class="scan-input-row">
+            <input
+              id="code-input"
+              class="scan-input"
+              placeholder="Escribe o escanea el código aquí"
+              autofocus
+            />
+            <button id="btn-search" class="btn-primary">Buscar</button>
+          </div>
+
+          <div class="scan-controls-row">
+            <button id="btn-toggle-camera" class="btn-secondary">
+              Usar cámara
+            </button>
+            <span class="hint">
+              Códigos de barras · QR · Pistola lectora
+            </span>
+          </div>
+
+          <div class="video-wrapper" id="video-wrapper" hidden>
+            <video id="preview" playsinline></video>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">
+          <div class="pill-link">Escaneo en tiempo real</div>
+          <div class="pill-link">Alertas cada 10 min</div>
+          <div class="pill-link">Ficha emergente del producto</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="page-footer">
+      <span>Prototipo de sistema para control de vencimientos.</span>
+    </footer>
+  </div>
+
+  <!-- Supabase + cliente -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="static/js/supabaseClient.js"></script>
+
+  <!-- Lógica de scanner -->
+  <script src="static/js/scanner.js"></script>
+</body>
+</html>
